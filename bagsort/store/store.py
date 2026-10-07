@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 from contextlib import contextmanager
 from typing import Any, Iterator
 
@@ -42,6 +43,10 @@ class Store:
         self._journal = Journal()
         self._cache: State | None = None
         self._dirty = False
+        # One writer at a time: a session holds this lock from staging through
+        # commit or rollback, so a concurrent writer can neither mix commands
+        # into the pending buffer nor commit into the middle of a batch.
+        self._lock = threading.RLock()
 
     @property
     def path(self) -> str:
@@ -94,16 +99,22 @@ class Store:
 
     @contextmanager
     def session(self) -> Iterator[Session]:
-        """Buffer commands; commit on clean exit, roll back on any exception."""
+        """Buffer commands; commit on clean exit, roll back on any exception.
 
-        try:
-            yield Session(self)
-        except BaseException:
-            self._journal.rollback()
-            raise
-        else:
-            if self._journal.has_pending():
-                self.commit()
+        The write lock is held for the whole span, so validation, staging and
+        the final commit or rollback are one serialized step: a concurrent
+        session cannot interleave its own commands or observe this buffer.
+        """
+
+        with self._lock:
+            try:
+                yield Session(self)
+            except BaseException:
+                self._journal.rollback()
+                raise
+            else:
+                if self._journal.has_pending():
+                    self.commit()
 
     @property
     def journal(self) -> Journal:
@@ -112,25 +123,28 @@ class Store:
         return self._journal
 
     def commit(self) -> int:
-        if not self._journal.has_pending():
-            raise ConflictError("nothing to commit")
-        watermark = self._journal.commit()
-        self._cache = None
-        self._dirty = True
-        return watermark
+        with self._lock:
+            if not self._journal.has_pending():
+                raise ConflictError("nothing to commit")
+            watermark = self._journal.commit()
+            self._cache = None
+            self._dirty = True
+            return watermark
 
     def rollback(self) -> int:
-        dropped = self._journal.rollback()
-        if dropped:
-            self._dirty = True
-        return dropped
+        with self._lock:
+            dropped = self._journal.rollback()
+            if dropped:
+                self._dirty = True
+            return dropped
 
     def reset(self) -> None:
         """Drop the whole history, keeping the store usable."""
 
-        self._journal = Journal()
-        self._cache = State()
-        self._dirty = True
+        with self._lock:
+            self._journal = Journal()
+            self._cache = State()
+            self._dirty = True
 
     # -- persistence -------------------------------------------------------
 
@@ -140,17 +154,18 @@ class Store:
     def persist(self) -> str:
         """Write the checksummed envelope atomically and return the digest."""
 
-        envelope = self.envelope()
-        parent = os.path.dirname(self._path)
-        if parent:
-            os.makedirs(parent, exist_ok=True)
-        raw = json.dumps(envelope.as_dict(), ensure_ascii=False, indent=2, sort_keys=True)
-        temporary = f"{self._path}.tmp"
-        with open(temporary, "w", encoding="utf-8") as handle:
-            handle.write(raw)
-        os.replace(temporary, self._path)
-        self._dirty = False
-        return envelope.digest
+        with self._lock:
+            envelope = self.envelope()
+            parent = os.path.dirname(self._path)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+            raw = json.dumps(envelope.as_dict(), ensure_ascii=False, indent=2, sort_keys=True)
+            temporary = f"{self._path}.tmp"
+            with open(temporary, "w", encoding="utf-8") as handle:
+                handle.write(raw)
+            os.replace(temporary, self._path)
+            self._dirty = False
+            return envelope.digest
 
     def restore(self, envelope: Envelope) -> None:
         """Replace the log with a verified envelope.
@@ -161,12 +176,13 @@ class Store:
 
         if not envelope.verify():
             raise ValidationError("snapshot digest does not match its entries")
-        self._journal = Journal()
-        for entry in envelope.entries:
-            self._journal.append(entry.kind, entry.payload, entry.at)
-        self._journal.commit()
-        self._cache = None
-        self._dirty = False
+        with self._lock:
+            self._journal = Journal()
+            for entry in envelope.entries:
+                self._journal.append(entry.kind, entry.payload, entry.at)
+            self._journal.commit()
+            self._cache = None
+            self._dirty = False
 
     @classmethod
     def open(cls, path: str) -> "Store":

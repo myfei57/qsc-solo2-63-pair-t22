@@ -38,10 +38,6 @@ class AuditChain:
         audit = self._store.state().audit
         return audit[-1] if audit else None
 
-    def last_digest(self) -> str:
-        entry = self.last()
-        return entry.digest if entry else GENESIS
-
     def record(
         self,
         kind: str,
@@ -50,9 +46,29 @@ class AuditChain:
         detail: dict[str, Any] | None = None,
         at: str | None = None,
     ) -> AuditEntry:
+        with self._store.session() as session:
+            return self.stage(session, kind, subject, stage, detail, at)
+
+    def stage(
+        self,
+        session,
+        kind: str,
+        subject: str,
+        stage: str,
+        detail: dict[str, Any] | None = None,
+        at: str | None = None,
+    ) -> AuditEntry:
+        """Buffer an entry on the caller's session so it commits with that batch.
+
+        The digest chain links through the entries already staged on the same
+        session, so a batch of entries stays internally consistent and commits
+        as one journal transaction alongside the commands it describes.
+        """
+
         if not self._topology.contains(stage):
             raise ValueError(f"unknown handling stage {stage!r}")
-        sequence = self.count() + 1
+        staged = session.state.audit
+        sequence = len(staged) + 1
         payload: dict[str, Any] = {
             "stage": stage,
             "stage_index": self._topology.index_of(stage),
@@ -64,7 +80,7 @@ class AuditChain:
             kind=kind,
             subject=subject,
             detail=payload,
-            prev_digest=self.last_digest(),
+            prev_digest=staged[-1].digest if staged else GENESIS,
             at=at or self._clock.now_iso(),
         )
         digest = digest_of(entry)
@@ -77,9 +93,8 @@ class AuditChain:
             digest=digest,
             at=entry.at,
         )
-        with self._store.session() as session:
-            session.state.audit.append(entry)
-            session.record("audit.append", {"entry": entry.as_dict()}, entry.at)
+        session.state.audit.append(entry)
+        session.record("audit.append", {"entry": entry.as_dict()}, entry.at)
         return entry
 
     def for_subject(self, subject: str) -> list[AuditEntry]:

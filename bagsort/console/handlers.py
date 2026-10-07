@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from bagsort.checkin.entries import Entry
+from bagsort.errors import BatchRemapError
+from bagsort.flight.remap import RemapItem
 from bagsort.model.entities import Flight, Reading
 from bagsort.model.validate import validate_flight
 from bagsort.reporting import csv_export
@@ -296,6 +298,21 @@ def handle_bag_flight(server, request: Request) -> Response:
 def handle_remap_bag(server, request: Request) -> Response:
     bag = _plant(server).remap_bag(request.param("id"), request.required("flight_id"))
     return json_response(bag.as_dict())
+
+
+def handle_remap_batch(server, request: Request) -> Response:
+    items = [
+        RemapItem.from_dict(item) for item in request.list_payload() if isinstance(item, dict)
+    ]
+    try:
+        result = _plant(server).remap_batch(items)
+    except BatchRemapError as exc:
+        return json_response(exc.as_dict(), status=409)
+    return json_response(result.as_dict())
+
+
+def handle_remap_batch_history(server, request: Request) -> Response:
+    return json_response(_plant(server).batch_remap.history(request.param("batch_id")))
 
 
 def handle_route_detail(server, request: Request) -> Response:

@@ -46,3 +46,21 @@ class QuotaError(ControlError):
     """A quota or capacity bound rejected the request."""
 
     code = "quota_exceeded"
+
+
+class BatchRemapError(ConflictError):
+    """A remap batch was rejected; every failure names the item that caused it."""
+
+    code = "batch_remap_rejected"
+
+    def __init__(self, failures: list[dict[str, object]]) -> None:
+        self.failures = [dict(failure) for failure in failures]
+        bags = ", ".join(str(failure.get("bag_id", "?")) for failure in self.failures)
+        super().__init__(
+            f"remap batch rejected: {len(self.failures)} item(s) failed ({bags})"
+        )
+
+    def as_dict(self) -> dict[str, object]:
+        payload: dict[str, object] = dict(super().as_dict())
+        payload["failures"] = [dict(failure) for failure in self.failures]
+        return payload

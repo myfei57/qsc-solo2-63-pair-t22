@@ -71,6 +71,8 @@ def route_table() -> list[Route]:
         Route("GET", "/api/bags", "list committed bags", "handle_list_bags"),
         Route("POST", "/api/bags/checkin", "check in one bag", "handle_check_in"),
         Route("POST", "/api/bags/checkin-batch", "check in several bags", "handle_check_in_batch"),
+        Route("POST", "/api/bags/remap-batch", "re-map several bags in one atomic commit", "handle_remap_batch"),
+        Route("GET", "/api/remaps/{batch_id}", "one remap batch, line by line", "handle_remap_batch_history"),
         Route("GET", "/api/bags/{id}", "read one bag", "handle_get_bag"),
         Route("DELETE", "/api/bags/{id}", "cancel a check-in", "handle_cancel_check_in"),
         Route("GET", "/api/bags/{id}/flight", "flight a bag is mapped to", "handle_bag_flight"),

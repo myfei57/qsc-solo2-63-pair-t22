@@ -19,3 +19,7 @@ def unknown_flight(flight_id: str) -> NotFoundError:
 
 def unknown_bag(bag_id: str) -> NotFoundError:
     return NotFoundError(f"bag {bag_id!r} is not registered")
+
+
+def unknown_remap_batch(batch_id: str) -> NotFoundError:
+    return NotFoundError(f"remap batch {batch_id!r} is not recorded")

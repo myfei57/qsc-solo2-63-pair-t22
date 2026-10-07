@@ -18,6 +18,7 @@ from bagsort.events.bus import EventBus
 from bagsort.flight.book import FlightBook
 from bagsort.flight.close import FlightCloser
 from bagsort.flight.mapping import BagMapping
+from bagsort.flight.remap import BatchRemap, BatchResult, RemapItem
 from bagsort.flight.schedule import ScheduleBoard
 from bagsort.ids import IdFactory
 from bagsort.inject.injector import Injector
@@ -57,6 +58,7 @@ class Plant:
     reads: ReadHistory
     book: FlightBook
     mapping: BagMapping
+    batch_remap: BatchRemap
     schedule: ScheduleBoard
     closer: FlightCloser
     chutes: ChuteAssigner
@@ -120,6 +122,8 @@ class Plant:
         ):
             bus.subscribe(topic, audit_subscriber)
 
+        batch_remap = BatchRemap(store, audit, clock)
+
         report = PlantReport(
             store, book, chutes, belt, quota, audit, namespace, handling_line()
         )
@@ -135,6 +139,7 @@ class Plant:
             reads=reads,
             book=book,
             mapping=mapping,
+            batch_remap=batch_remap,
             schedule=schedule,
             closer=closer,
             chutes=chutes,
@@ -211,6 +216,13 @@ class Plant:
         self.mapping.remap(bag_id, flight_id)
         self.bus.publish("bag.remapped", bag_id=bag_id, flight_id=flight_id)
         return self.bag(bag_id)
+
+    def remap_batch(self, items: list[RemapItem]) -> BatchResult:
+        """Move many bags at once; either every mapping lands or none does."""
+
+        result = self.batch_remap.apply(items)
+        self.bus.publish("bag.remap_batch", batch_id=result.batch_id, count=len(result.items))
+        return result
 
     def revise_schedule(self, flight_id: str, cutoff_at: str):
         return self.schedule.revise(flight_id, cutoff_at)
