@@ -15,7 +15,7 @@ from typing import Any
 from bagsort.clock import Clock
 from bagsort.model.entities import AuditEntry
 from bagsort.ns.topology import Topology
-from bagsort.store.store import Store
+from bagsort.store.store import Session, Store
 
 GENESIS = "0" * 64
 
@@ -38,10 +38,6 @@ class AuditChain:
         audit = self._store.state().audit
         return audit[-1] if audit else None
 
-    def last_digest(self) -> str:
-        entry = self.last()
-        return entry.digest if entry else GENESIS
-
     def record(
         self,
         kind: str,
@@ -50,9 +46,30 @@ class AuditChain:
         detail: dict[str, Any] | None = None,
         at: str | None = None,
     ) -> AuditEntry:
+        with self._store.session() as session:
+            return self.stage(session, kind, subject, stage, detail, at)
+
+    def stage(
+        self,
+        session: Session,
+        kind: str,
+        subject: str,
+        stage: str,
+        detail: dict[str, Any] | None = None,
+        at: str | None = None,
+    ) -> AuditEntry:
+        """Build the linked entry inside an existing session.
+
+        Staging lets a multi-command operation carry its audit entry in the
+        same atomic commit as the changes it describes, so the chain and the
+        journal can never disagree about whether the operation happened.
+        """
+
         if not self._topology.contains(stage):
             raise ValueError(f"unknown handling stage {stage!r}")
-        sequence = self.count() + 1
+        audit = session.state.audit
+        sequence = len(audit) + 1
+        prev_digest = audit[-1].digest if audit else GENESIS
         payload: dict[str, Any] = {
             "stage": stage,
             "stage_index": self._topology.index_of(stage),
@@ -64,22 +81,20 @@ class AuditChain:
             kind=kind,
             subject=subject,
             detail=payload,
-            prev_digest=self.last_digest(),
+            prev_digest=prev_digest,
             at=at or self._clock.now_iso(),
         )
-        digest = digest_of(entry)
         entry = AuditEntry(
             sequence=entry.sequence,
             kind=entry.kind,
             subject=entry.subject,
             detail=entry.detail,
             prev_digest=entry.prev_digest,
-            digest=digest,
+            digest=digest_of(entry),
             at=entry.at,
         )
-        with self._store.session() as session:
-            session.state.audit.append(entry)
-            session.record("audit.append", {"entry": entry.as_dict()}, entry.at)
+        session.state.audit.append(entry)
+        session.record("audit.append", {"entry": entry.as_dict()}, entry.at)
         return entry
 
     def for_subject(self, subject: str) -> list[AuditEntry]:

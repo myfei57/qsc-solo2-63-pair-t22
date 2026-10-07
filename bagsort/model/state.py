@@ -109,6 +109,10 @@ def apply_entry(state: State, kind: str, payload: dict[str, Any]) -> None:
         state.mappings.pop(str(payload["bag_id"]), None)
     elif kind == "mapping.put":
         state.mappings[str(payload["bag_id"])] = str(payload["flight_id"])
+    elif kind == "mapping.batch":
+        # Batch header: history and audit metadata. The mapping.put commands
+        # committed alongside it are what actually move the mappings.
+        pass
     elif kind == "sequence.put":
         state.sequence = Sequence.from_dict(payload)
     elif kind == "sort.record":

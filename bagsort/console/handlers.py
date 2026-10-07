@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from bagsort.checkin.entries import Entry
+from bagsort.flight.remap import BatchRemapError, RemapItem
 from bagsort.model.entities import Flight, Reading
 from bagsort.model.validate import validate_flight
 from bagsort.reporting import csv_export
 from bagsort.sequence.allocator import preview
 from bagsort.store.replay import replay
-from .http import Request, Response, csv_response, json_response, text_response
+from .http import Request, RequestError, Response, csv_response, json_response, text_response
 from .routes import route_table
 from .version import version_info
 
@@ -296,6 +297,64 @@ def handle_bag_flight(server, request: Request) -> Response:
 def handle_remap_bag(server, request: Request) -> Response:
     bag = _plant(server).remap_bag(request.param("id"), request.required("flight_id"))
     return json_response(bag.as_dict())
+
+
+def _remap_items(request: Request) -> list[RemapItem]:
+    raw: object = request.payload.get("items")
+    if raw is None and request.items:
+        raw = list(request.items)
+    if not isinstance(raw, list) or not raw:
+        raise RequestError(400, "field items must be a non-empty array")
+    items: list[RemapItem] = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            raise RequestError(400, "each item must name bag_id and flight_id")
+        items.append(
+            RemapItem(
+                bag_id=str(entry.get("bag_id") or ""),
+                flight_id=str(entry.get("flight_id") or ""),
+            )
+        )
+    return items
+
+
+def handle_remap_batch(server, request: Request) -> Response:
+    plant = _plant(server)
+    try:
+        batch = plant.remap_batch(
+            _remap_items(request), batch_id=request.str_field("batch_id")
+        )
+    except BatchRemapError as exc:
+        return json_response(
+            {
+                "error": str(exc),
+                "failures": [failure.as_dict() for failure in exc.failures],
+            },
+            status=400,
+        )
+    # The batch is an administrative change of record: persist it at once and
+    # hand back the snapshot digest so the caller can verify what hit disk.
+    digest = plant.store.persist()
+    return json_response({**batch.as_dict(), "digest": digest}, status=201)
+
+
+def handle_remap_batches(server, request: Request) -> Response:
+    return json_response([batch.as_dict() for batch in _plant(server).remap_batches()])
+
+
+def handle_remap_batch_detail(server, request: Request) -> Response:
+    return json_response(_plant(server).remap_batch_detail(request.param("batch")).as_dict())
+
+
+def handle_remap_batch_rollback(server, request: Request) -> Response:
+    plant = _plant(server)
+    batch = plant.rollback_remap_batch(request.param("batch"))
+    digest = plant.store.persist()
+    return json_response({**batch.as_dict(), "digest": digest})
+
+
+def handle_remap_reconcile(server, request: Request) -> Response:
+    return json_response(_plant(server).remap_reconcile(request.param("batch")))
 
 
 def handle_route_detail(server, request: Request) -> Response:

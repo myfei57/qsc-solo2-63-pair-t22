@@ -18,6 +18,7 @@ from bagsort.events.bus import EventBus
 from bagsort.flight.book import FlightBook
 from bagsort.flight.close import FlightCloser
 from bagsort.flight.mapping import BagMapping
+from bagsort.flight.remap import BatchRemap, RemapBatch, RemapItem
 from bagsort.flight.schedule import ScheduleBoard
 from bagsort.ids import IdFactory
 from bagsort.inject.injector import Injector
@@ -57,6 +58,7 @@ class Plant:
     reads: ReadHistory
     book: FlightBook
     mapping: BagMapping
+    remapper: BatchRemap
     schedule: ScheduleBoard
     closer: FlightCloser
     chutes: ChuteAssigner
@@ -107,6 +109,7 @@ class Plant:
         belt = Belt(store, clock, IdFactory("cmd"))
 
         audit = AuditChain(store, clock, handling_line())
+        remapper = BatchRemap(store, audit, clock)
         audit_subscriber = _AuditSubscriber(audit)
         for topic in (
             "bag.checked_in",
@@ -135,6 +138,7 @@ class Plant:
             reads=reads,
             book=book,
             mapping=mapping,
+            remapper=remapper,
             schedule=schedule,
             closer=closer,
             chutes=chutes,
@@ -211,6 +215,43 @@ class Plant:
         self.mapping.remap(bag_id, flight_id)
         self.bus.publish("bag.remapped", bag_id=bag_id, flight_id=flight_id)
         return self.bag(bag_id)
+
+    def remap_batch(self, items: list[RemapItem], batch_id: str = "") -> RemapBatch:
+        """Move every listed bag in one all-or-nothing commit.
+
+        The audit entry rides in the same commit as the mapping changes, so
+        the event below is published for telemetry only; subscribing the
+        audit chain to it would record the batch twice.
+        """
+
+        batch = self.remapper.apply(items, batch_id=batch_id)
+        self.bus.publish(
+            "bag.remap_batch",
+            batch_id=batch.id,
+            action=batch.action,
+            count=len(batch.items),
+        )
+        return batch
+
+    def rollback_remap_batch(self, batch_id: str) -> RemapBatch:
+        batch = self.remapper.rollback(batch_id)
+        self.bus.publish(
+            "bag.remap_batch",
+            batch_id=batch.id,
+            action=batch.action,
+            rollback_of=batch.rollback_of,
+            count=len(batch.items),
+        )
+        return batch
+
+    def remap_batches(self) -> list[RemapBatch]:
+        return self.remapper.batches()
+
+    def remap_batch_detail(self, batch_id: str) -> RemapBatch:
+        return self.remapper.batch(batch_id)
+
+    def remap_reconcile(self, batch_id: str) -> dict[str, object]:
+        return self.remapper.reconcile(batch_id)
 
     def revise_schedule(self, flight_id: str, cutoff_at: str):
         return self.schedule.revise(flight_id, cutoff_at)

@@ -75,6 +75,12 @@ def route_table() -> list[Route]:
         Route("DELETE", "/api/bags/{id}", "cancel a check-in", "handle_cancel_check_in"),
         Route("GET", "/api/bags/{id}/flight", "flight a bag is mapped to", "handle_bag_flight"),
         Route("POST", "/api/bags/{id}/remap", "move a bag to another flight", "handle_remap_bag"),
+        # -- remap batches --------------------------------------------------
+        Route("POST", "/api/remap/batch", "remap a batch of bags atomically", "handle_remap_batch"),
+        Route("GET", "/api/remap/batches", "list committed remap batches", "handle_remap_batches"),
+        Route("GET", "/api/remap/{batch}", "read one remap batch", "handle_remap_batch_detail"),
+        Route("POST", "/api/remap/{batch}/rollback", "roll back a committed remap batch", "handle_remap_batch_rollback"),
+        Route("GET", "/api/remap/{batch}/reconcile", "cross-check a remap batch", "handle_remap_reconcile"),
         Route("GET", "/api/bags/{id}/route", "resolved route of a bag", "handle_route_detail"),
         Route("GET", "/api/bags/{id}/sort-count", "how often a bag was sorted", "handle_sort_count"),
         Route("GET", "/api/bags/{id}/last-chute", "the chute a bag last used", "handle_last_chute"),
